@@ -1,10 +1,9 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using System.Collections;
-using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 
-public class Gyroscope : MonoBehaviour
+public class Interaction01 : MonoBehaviour
 {
     [Header("Rotation Settings")]
     public float rotationThreshold = 5f; // Threshold for "close to zero" rotation in degrees
@@ -121,5 +120,10 @@ public class Gyroscope : MonoBehaviour
             angle -= 360f;
         }
         return angle;
+    }
+
+    public void ContinueButtonClicked()
+    {
+        SceneManager.LoadScene("MainScene");
     }
 }
