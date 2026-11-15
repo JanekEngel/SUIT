@@ -23,6 +23,12 @@ public class Gyroscope : MonoBehaviour
     {
         Input.gyro.enabled = true;
         
+        // Rotate object by random angles between 30 and 330 degrees on all 3 axes
+        float randomX = Random.Range(30f, 330f);
+        float randomY = Random.Range(30f, 330f);
+        float randomZ = Random.Range(30f, 330f);
+        transform.localEulerAngles = new Vector3(randomX, randomY, randomZ);
+        
         // Create UI Canvas if it doesn't exist
         CreateUI();
     }
