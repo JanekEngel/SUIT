@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using UnityEngine.Android;
 using System;
 using System.Text;
+using Unity.Mathematics;
 
 public class Mouse : MonoBehaviour
 {
@@ -46,6 +47,9 @@ public class Mouse : MonoBehaviour
     
     void Start()
     {
+        // Gyro initialization
+        Input.gyro.enabled = true;
+        
         // check if the app has microphone permission
         if (!Permission.HasUserAuthorizedPermission(Permission.Microphone))
         {
@@ -127,7 +131,14 @@ public class Mouse : MonoBehaviour
         
         // get current volume
         float volume = this.GetCurrentVolume();
+        if (Settings.instance != null)
+        {
+            this.minimumVolume = Settings.instance.cutoff.GetValue();
+            this.volumeMultiplier = Settings.instance.volume.GetValue();
+        }
         volume = Mathf.Clamp(volume - this.minimumVolume, 0.0f, 1.0f - this.minimumVolume) / (1.0f - this.minimumVolume);
+        if (float.IsNaN(volume))
+            volume = 0.0f;
         volume *= this.volumeMultiplier;
         volume = Mathf.Clamp(volume, 0.0f, 1.0f);
         
@@ -143,11 +154,12 @@ public class Mouse : MonoBehaviour
         // add microphone based velocity
         velocity += new Vector3(-volume * this.upwardVelocity, 0.0f, 0.0f);
         
-        // add left/right
-        // if (Input.GetKey(KeyCode.D))
-        //     velocity += new Vector3(0.0f, 0.0f, this.velocityMultiplier);
-        // if (Input.GetKey(KeyCode.A))
-        //     velocity += new Vector3(0.0f, 0.0f, -this.velocityMultiplier);
+        // get gyroscope rotation
+        Quaternion gyro = Input.gyro.attitude;
+        // get euler angles with Y as first element (so to get the rotation around the y axis later)
+        Vector3 rotation = math.Euler(gyro, math.RotationOrder.YXZ);
+        // get rotation around y axis and turn it into angle
+        velocity.z += rotation.y / Mathf.PI * 2.0f * velocityMultiplier;
         
         // set the current velocity
         this.GetComponent<Rigidbody>().linearVelocity = velocity;
