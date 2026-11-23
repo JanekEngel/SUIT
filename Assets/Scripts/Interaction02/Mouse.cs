@@ -3,7 +3,6 @@ using UnityEngine.UI;
 using UnityEngine.Android;
 using System;
 using System.Text;
-using Unity.Mathematics;
 
 public class Mouse : MonoBehaviour
 {
@@ -26,10 +25,13 @@ public class Mouse : MonoBehaviour
     [SerializeField]
     public float upwardVelocity = 5.0f;
     
-    // Scales the gyroscope tilt (rotation around the y-axis) into z-axis velocity.
-    // Higher values steer more per tilt.
+    // Scales the gyroscope tilt into z-axis velocity. Higher values steer more per tilt.
     [SerializeField]
     public float velocityMultiplier = 10.0f;
+    // The tilt angle in degrees at which the gyroscope steering saturates (full speed).
+    // Lower = you have to tilt further to reach full speed; higher = more sensitive.
+    [SerializeField]
+    public float maxSteerAngle = 30.0f;
     
     // One-pole high-pass cutoff in Hz applied to the raw mic samples before analysis.
     // Removes DC offset and low-frequency handling rumble. Lower it (e.g. 50) to keep deep
@@ -275,12 +277,14 @@ public class Mouse : MonoBehaviour
         // add microphone based velocity
         velocity += new Vector3(-volume * this.upwardVelocity, 0.0f, 0.0f);
         
-        // get gyroscope rotation
-        Quaternion gyro = Input.gyro.attitude;
-        // get euler angles with Y as first element (so to get the rotation around the y axis later)
-        Vector3 rotation = math.Euler(gyro, math.RotationOrder.YXZ);
-        // get rotation around y axis and turn it into angle
-        velocity.z += rotation.y / Mathf.PI * 2.0f * velocityMultiplier;
+        // get the gravity direction in device space. Unlike euler angles this never wraps
+        // at +-180 degrees, so the steering stays continuous when the tablet is raised to
+        // vertical or held upside down; it just saturates once maxSteerAngle is reached.
+        Vector3 gravity = Input.gyro.gravity;
+        // lateral tilt = gravity component along the device x-axis (left/right), normalized
+        // so that maxSteerAngle of tilt maps to full steering
+        float steer = Mathf.Clamp(gravity.x / Mathf.Sin(this.maxSteerAngle * Mathf.Deg2Rad), -1.0f, 1.0f);
+        velocity.z += steer * velocityMultiplier;
         
         // set the current velocity
         this.GetComponent<Rigidbody>().linearVelocity = velocity;

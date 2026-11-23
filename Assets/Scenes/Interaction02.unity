@@ -3959,7 +3959,8 @@ MonoBehaviour:
   minimumVolume: 0
   volumeMultiplier: 25
   upwardVelocity: 5
-  velocityMultiplier: 10
+  velocityMultiplier: 5
+  maxSteerAngle: 45
   highPassCutoff: 80
   subWindowCount: 25
   maxZeroCrossingRate: 0.1
