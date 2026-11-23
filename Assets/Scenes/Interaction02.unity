@@ -1920,7 +1920,7 @@ Camera:
   m_ShutterSpeed: 0.005
   m_Aperture: 16
   m_FocusDistance: 10
-  m_FocalLength: 50
+  m_FocalLength: 20.78461
   m_BladeCount: 5
   m_Curvature: {x: 2, y: 11}
   m_BarrelClipping: 0.25
@@ -1935,7 +1935,7 @@ Camera:
     height: 1
   near clip plane: 0.3
   far clip plane: 1000
-  field of view: 60
+  field of view: 60.000004
   orthographic: 0
   orthographic size: 8.85
   m_Depth: -1
@@ -3831,6 +3831,15 @@ MonoBehaviour:
   volumeMultiplier: 25
   upwardVelocity: 5
   velocityMultiplier: 10
+  highPassCutoff: 80
+  subWindowCount: 25
+  maxZeroCrossingRate: 0.1
+  maxCrestFactor: 5
+  noiseFloor: 0.005
+  tapOnsetLevel: 0.15
+  tapOnsetRatio: 4
+  tapMuteDuration: 0.1
+  minVoiceSubWindows: 10
   volumePanel: {fileID: 2028687236}
 --- !u!1 &1518726960
 GameObject:
@@ -4224,7 +4233,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SliderNumberCombo
   numberField: {fileID: 2142978424}
   slider: {fileID: 1870735574}
-  value: 10
+  value: 30
 --- !u!1 &1664034345
 GameObject:
   m_ObjectHideFlags: 0
@@ -4966,7 +4975,7 @@ MonoBehaviour:
   m_MinValue: 0
   m_MaxValue: 50
   m_WholeNumbers: 0
-  m_Value: 10
+  m_Value: 0
   m_OnValueChanged:
     m_PersistentCalls:
       m_Calls:

@@ -8,31 +8,76 @@ using Unity.Mathematics;
 public class Mouse : MonoBehaviour
 {
     
-    // The default velocity of the mouse
+    // The default velocity of the mouse, applied every frame regardless of input.
+    // Increasing x makes the mouse constantly move faster along its x-axis.
     [SerializeField]
     public Vector3 defaultVelocity = new Vector3(1.0f, 0.0f, 0.0f);
     
-    // The minimum volume of the microphone below which it will not register (0-1)
+    // Cutoff: measured volume below this is treated as 0. Overwritten every frame by the
+    // Settings "cutoff" slider. Raise it to ignore quiet sounds and background noise.
     [SerializeField]
     public float minimumVolume = 0.0f;
-    // The multiplier of the microphone volume
+    // Gain applied after the cutoff: final = clamp((volume - cutoff) / (1 - cutoff)) * multiplier.
+    // Overwritten every frame by the Settings "volume" slider. Raise it to make quiet sounds move the mouse.
     [SerializeField]
     public float volumeMultiplier = 25.0f;
-    // The upwards velocity in case the volume is maxed out
+    // The x-velocity removed when the volume is maxed out (volume 1 -> -upwardVelocity on x).
+    // Higher values make loud sounds push the mouse back harder.
     [SerializeField]
     public float upwardVelocity = 5.0f;
     
-    // The multiplier for the velocity of other inputs
+    // Scales the gyroscope tilt (rotation around the y-axis) into z-axis velocity.
+    // Higher values steer more per tilt.
     [SerializeField]
     public float velocityMultiplier = 10.0f;
     
-    // An optional panel to display the current volume
+    // One-pole high-pass cutoff in Hz applied to the raw mic samples before analysis.
+    // Removes DC offset and low-frequency handling rumble. Lower it (e.g. 50) to keep deep
+    // male voices, raise it (e.g. 150) to remove more tap thump but the voice gets thinner.
+    [SerializeField]
+    public float highPassCutoff = 80.0f;
+    // The sample window is split into this many sub-windows for analysis (25 x 10 ms at 44.1 kHz).
+    // More sub-windows = finer time resolution and faster reaction; keep sampleWindow / subWindowCount at ~10 ms.
+    [SerializeField]
+    public int subWindowCount = 25;
+    // Zero-crossing rate per sub-window above which it counts as broadband noise (tap click)
+    // instead of periodic voice. Lower = stricter (also rejects fricatives like "s"), higher = more permissive.
+    [SerializeField]
+    public float maxZeroCrossingRate = 0.15f;
+    // Crest factor (peak / RMS) per sub-window above which it counts as a single impulse instead
+    // of voice. Lower = stricter against clicks, higher = lets spikier sounds through.
+    [SerializeField]
+    public float maxCrestFactor = 10.0f;
+    // RMS per sub-window below which it counts as silence. Lower = quieter sounds register
+    // (but background noise may too), higher = only louder sounds register.
+    [SerializeField]
+    public float noiseFloor = 0.003f;
+    // A sub-window counts as a tap onset if its RMS is at least this loud (absolute).
+    // Lower = softer taps are muted too (but loud voice onsets may trigger the mute), higher = only hard taps.
+    [SerializeField]
+    public float tapOnsetLevel = 0.15f;
+    // ... and at least this many times louder than the previous sub-window (suddenness).
+    // Higher = only very abrupt spikes count as taps; voice onsets are gradual in comparison.
+    [SerializeField]
+    public float tapOnsetRatio = 4.0f;
+    // Seconds the microphone stays muted after a detected tap, covering the tap's ring.
+    // Longer = more tap suppression but voice is also muted right after a tap; shorter = faster recovery.
+    [SerializeField]
+    public float tapMuteDuration = 0.15f;
+    // Minimum number of voice-like sub-windows (10 ms each) required before any volume registers.
+    // Lower = faster reaction to voice, but brief noises can register; higher = slower but more deliberate.
+    [SerializeField]
+    public int minVoiceSubWindows = 5;
+    
+    // Optional UI Image whose width shows the current volume; it displays exactly the value
+    // that drives the microphone-based movement in the same frame.
     [SerializeField]
     public Image volumePanel = null;
     
-    // The number of samples to gather from the microphone each update
-    public readonly int sampleWindow = 4410;
-    // The length of the audioclip in seconds
+    // Samples analyzed per update (250 ms at 44.1 kHz). Readonly, so always the code value, never
+    // serialized. Shorter = less averaging lag but a noisier estimate; must stay <= clipLength * sampleFrequency.
+    public readonly int sampleWindow = 11025;
+    // Length of the looping microphone AudioClip in seconds (the ring buffer the samples are read from).
     public readonly int clipLength = 1;
     // The sample frequency of the microphone
     private int _sampleFrequency;
@@ -44,6 +89,8 @@ public class Mouse : MonoBehaviour
     private AudioClip _clip;
     
     private bool _micInitialized = false;
+    // counts down while microphone input is ignored because of a detected tap
+    private float _tapMuteTimer = 0.0f;
     
     void Start()
     {
@@ -113,15 +160,84 @@ public class Mouse : MonoBehaviour
         // fetch the last data from the microphone
         this._clip.GetData(micData, (sample - this.sampleWindow - 1) % (this.clipLength * this._sampleFrequency));
         
-        // find max peak of the sample size to use as volume
-        float volume = 0;
+        // Classify the window by its sub-window shape instead of its raw peak.
+        // A tap on the device is a sudden, loud, broadband spike followed by a fast
+        // decay; voice is periodic and sustains. So: split the window into sub-windows,
+        // flag a tap onset (a sub-window that is much louder than the one before it),
+        // and only average the RMS of sub-windows that look like voice.
+        float dt = 1.0f / this._sampleFrequency;
+        // one-pole high-pass coefficient (removes DC offset and handling rumble)
+        float hpCoeff = 1.0f / (1.0f + 2.0f * Mathf.PI * this.highPassCutoff * dt);
+        
+        int subWindowSize = this.sampleWindow / this.subWindowCount;
+        
+        float[] subRms = new float[this.subWindowCount];
+        bool[] subVoiced = new bool[this.subWindowCount];
+        bool transient = false;
+        
+        float hpState = 0.0f;
+        float prevSample = 0.0f;
+        float sumSquares = 0.0f;
+        float peak = 0.0f;
+        int zeroCrossings = 0;
+        bool prevSign = false;
         for (int i = 0; i < this.sampleWindow; i++)
         {
-            if (micData[i] > volume)
-                volume = Mathf.Abs(micData[i]);
+            float x = micData[i];
+            bool sign = x >= 0.0f;
+            if (i > 0 && sign != prevSign)
+                zeroCrossings++;
+            prevSign = sign;
+            hpState = hpCoeff * (hpState + x - prevSample);
+            prevSample = x;
+            sumSquares += hpState * hpState;
+            float abs = Mathf.Abs(hpState);
+            if (abs > peak)
+                peak = abs;
+            
+            if ((i + 1) % subWindowSize == 0)
+            {
+                int s = i / subWindowSize;
+                float rms = Mathf.Sqrt(sumSquares / subWindowSize);
+                subRms[s] = rms;
+                // voice is periodic: moderate zero-crossing rate and crest factor, above the noise floor
+                subVoiced[s] = zeroCrossings / (float)subWindowSize <= this.maxZeroCrossingRate
+                    && peak / Mathf.Max(rms, 0.000001f) <= this.maxCrestFactor
+                    && rms > this.noiseFloor;
+                // a tap onset is a non-voice-like sub-window (impulse/noise) that is loud in
+                // absolute terms and much louder than the sub-window before it; a voice onset
+                // is voice-like, so it never triggers the mute
+                if (s > 0 && !subVoiced[s] && rms >= this.tapOnsetLevel && rms >= this.tapOnsetRatio * Mathf.Max(subRms[s - 1], 0.0001f))
+                    transient = true;
+                sumSquares = 0.0f;
+                peak = 0.0f;
+                zeroCrossings = 0;
+            }
         }
         
-        return volume;
+        // a tap that starts right at the window edge: loud, non-voice-like first sub-window that decays immediately
+        if (!subVoiced[0] && subRms[0] >= this.tapOnsetLevel && subRms[0] >= this.tapOnsetRatio * Mathf.Max(subRms[1], 0.0001f))
+            transient = true;
+        
+        // a detected tap mutes the microphone briefly; the sliding window then sees only voice again
+        if (transient)
+            this._tapMuteTimer = this.tapMuteDuration;
+        
+        int voiceSubWindows = 0;
+        float voiceSum = 0.0f;
+        for (int s = 0; s < this.subWindowCount; s++)
+        {
+            if (subVoiced[s])
+            {
+                voiceSubWindows++;
+                voiceSum += subRms[s];
+            }
+        }
+        
+        // sustained voice fills many sub-windows; a tap fills only a few
+        if (voiceSubWindows < this.minVoiceSubWindows)
+            return 0.0f;
+        return voiceSum / voiceSubWindows;
     }
     
     void Update()
@@ -129,8 +245,13 @@ public class Mouse : MonoBehaviour
         if (!this._micInitialized)
             return;
         
-        // get current volume
+        // get current volume (sets the mute timer itself if it detects a tap onset)
         float volume = this.GetCurrentVolume();
+        // stay muted briefly after a detected tap so the ring of the tap cannot register
+        this._tapMuteTimer = Mathf.Max(0.0f, this._tapMuteTimer - Time.deltaTime);
+        if (this._tapMuteTimer > 0.0f)
+            volume = 0.0f;
+        
         if (Settings.instance != null)
         {
             this.minimumVolume = Settings.instance.cutoff.GetValue();
